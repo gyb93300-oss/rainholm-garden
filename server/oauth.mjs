@@ -123,7 +123,7 @@ export async function createOAuth({ access, publicBase, dataDir, storage }) {
   app.post('/oauth/approve', express.urlencoded({ extended: false, limit: '8kb' }), async (req, res) => {
     const item = pending.get(req.body.transaction);
     const csrf = /(?:^|;\s*)rh_oauth_csrf=([^;]+)/.exec(req.headers.cookie || '')?.[1];
-    if (!item || item.exp < Date.now() || !csrf || !equal(hash(csrf), item.csrf) || req.headers.origin !== publicBase) return res.status(403).send('授权已过期或请求来源不匹配，请从客户端重新连接。');
+    if (!item || item.exp < Date.now() || !csrf || !equal(hash(csrf), item.csrf) || (req.headers.origin && req.headers.origin !== publicBase)) return res.status(403).send('授权已过期或请求来源不匹配，请从客户端重新连接。');
     if (++item.attempts > 5) { pending.delete(req.body.transaction); await persist(); return res.status(429).send('尝试过多，请重新连接。'); }
     const target = new URL(item.params.redirectUri);
     if (item.params.state) target.searchParams.set('state', item.params.state);
