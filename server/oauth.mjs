@@ -63,17 +63,12 @@ export async function createOAuth({ access, publicBase, dataDir, storage }) {
       for (const [key, value] of pending) if (value.exp < Date.now()) pending.delete(key);
       for (const [key, value] of codes) if (value.exp < Date.now()) codes.delete(key);
       if (pending.size >= 200) throw new InvalidGrantError('Too many pending authorizations.');
-     const csrf = newKey();
-const id = access.seal({
-  clientId: client.client_id,
-  params,
-  csrf: hash(csrf),
-  exp: Date.now() + 600000,
-  attempts: 0
-});
+      const id = newKey(), csrf = newKey();
+      pending.set(id, { clientId: client.client_id, params, csrf: hash(csrf), exp: Date.now() + 600000, attempts: 0 });
+      await persist();
       res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'" });
       res.cookie('rh_oauth_csrf', csrf, { httpOnly: true, secure: true, sameSite: 'lax', path: '/oauth/approve', maxAge: 600000 });
-      res.type('html').send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/connect/style.css"><title>授权花园伙伴</title><main><p class="eyebrow">RAINHOLM GARDEN</p><h1>让 AI 走进花园</h1><p>客户端：<strong>${escape(client.client_name || 'MCP client')}</strong></p><p>回调域名：${escape(new URL(params.redirectUri).host)}</p><p>授权后，该客户端可以读取花园状态和最近消息、指挥黑猫、种浇收。它不能取得玩家钥匙，也不能管理连接设置。只有你主动发起的连接才应继续。</p><form method="post" action="/oauth/approve"><input type="hidden" name="transaction" value="${id}"><input type="hidden" name="csrf" value="${csrf}"><label for="key">玩家钥匙</label><input id="key" name="key" type="password" required autocomplete="off"><button name="decision" value="approve">授权这个伙伴</button><button name="decision" value="deny" formnovalidate class="secondary">取消</button></form></main></html>`);
+      res.type('html').send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/connect/style.css"><title>授权花园伙伴</title><main><p class="eyebrow">RAINHOLM GARDEN</p><h1>让 AI 走进花园</h1><p>客户端：<strong>${escape(client.client_name || 'MCP client')}</strong></p><p>回调域名：${escape(new URL(params.redirectUri).host)}</p><p>授权后，该客户端可以读取花园状态和最近消息、指挥黑猫、种浇收。它不能取得玩家钥匙，也不能管理连接设置。只有你主动发起的连接才应继续。</p><form method="post" action="/oauth/approve"><input type="hidden" name="transaction" value="${id}"><label for="key">玩家钥匙</label><input id="key" name="key" type="password" required autocomplete="off"><button name="decision" value="approve">授权这个伙伴</button><button name="decision" value="deny" formnovalidate class="secondary">取消</button></form></main></html>`);
     },
     async challengeForAuthorizationCode(client, code) { return codeFor(client, code).params.codeChallenge; },
     async exchangeAuthorizationCode(client, code, _verifier, redirectUri, requestedResource) {
@@ -126,12 +121,9 @@ const id = access.seal({
   app.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   app.use(mcpAuthRouter({ ...rateOptions, provider, issuerUrl: new URL(publicBase), resourceServerUrl: new URL(resource), scopesSupported: ['garden:play'], resourceName: 'Rainholm Garden' }));
   app.post('/oauth/approve', express.urlencoded({ extended: false, limit: '8kb' }), async (req, res) => {
-    const item = access.unseal(req.body.transaction);
-    const csrf = req.body.csrf;
-    if (!item) return res.status(403).send('错误A：没有找到临时授权事务');
-if (item.exp < Date.now()) return res.status(403).send('错误B：临时授权已超时');
-if (!csrf) return res.status(403).send('错误C：表单没有提交校验值');
-if (!equal(hash(csrf), item.csrf)) return res.status(403).send('错误D：表单校验值不匹配');
+    const item = pending.get(req.body.transaction);
+    const csrf = /(?:^|;\s*)rh_oauth_csrf=([^;]+)/.exec(req.headers.cookie || '')?.[1];
+    if (!item || item.exp < Date.now() || !csrf || !equal(hash(csrf), item.csrf) || req.headers.origin !== publicBase) return res.status(403).send('授权已过期或请求来源不匹配，请从客户端重新连接。');
     if (++item.attempts > 5) { pending.delete(req.body.transaction); await persist(); return res.status(429).send('尝试过多，请重新连接。'); }
     const target = new URL(item.params.redirectUri);
     if (item.params.state) target.searchParams.set('state', item.params.state);
