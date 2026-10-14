@@ -123,7 +123,10 @@ export async function createOAuth({ access, publicBase, dataDir, storage }) {
   app.post('/oauth/approve', express.urlencoded({ extended: false, limit: '8kb' }), async (req, res) => {
     const item = pending.get(req.body.transaction);
     const csrf = req.body.csrf;
-    if (!item || item.exp < Date.now() || !csrf || !equal(hash(csrf), item.csrf)) return res.status(403).send('授权已过期，请从客户端重新连接。');
+    if (!item) return res.status(403).send('错误A：没有找到临时授权事务');
+if (item.exp < Date.now()) return res.status(403).send('错误B：临时授权已超时');
+if (!csrf) return res.status(403).send('错误C：表单没有提交校验值');
+if (!equal(hash(csrf), item.csrf)) return res.status(403).send('错误D：表单校验值不匹配');
     if (++item.attempts > 5) { pending.delete(req.body.transaction); await persist(); return res.status(429).send('尝试过多，请重新连接。'); }
     const target = new URL(item.params.redirectUri);
     if (item.params.state) target.searchParams.set('state', item.params.state);
